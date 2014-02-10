@@ -633,34 +633,77 @@ YUI.add('juju-topology-service', function(Y) {
      * @static
      * @return {undefined} Nothing.
      */
-    canvasDropHandler: function(e) {
+    canvasDropHandler: function(evt) {
+    // TODO rename this to "canvasDropHandlerShim".
       // Prevent Ubuntu FF 22.0 from refreshing the page.
-      e.halt();
+      evt.halt();
+      var files = evt._event.dataTransfer.files;
       var topo = this.get('component');
-      var evt = e._event;
-      var fileSources = evt.dataTransfer.files;
       var env = topo.get('env');
       var db = topo.get('db');
-      if (fileSources && fileSources.length) {
-        // If it is a file from the users file system being dropped.
-        Array.prototype.forEach.call(fileSources, function(file) {
-          // In order to support the user dragging and dropping multiple files
-          // of mixed types we handle each file individually.
-          var ext = file.name.split('.').slice(-1).toString();
+      return this._canvasDropHandler(files, topo, env, db, evt._event);
+    },
 
-          if ((file.type === 'application/zip' ||
-               file.type === 'application/x-zip-compressed') &&
-              ext === 'zip') {
-            localCharmHelpers.deployLocalCharm(file, env, db);
-          } else {
-            // We are going to assume it's a bundle if it's not a zip
-            bundleImportHelpers.deployBundleFiles(file, env, db);
-          }
-        });
+    _canvasDropHandler: function(files, topo, env, db, evt) {
+    // TODO rename this to "canvasDropHandler".
+      if (files && files.length > 1) {
+        return 'event ignored';
+      }
+      if (files && files.length) {
+        // If it is a file from the users file system being dropped.
+        var file = files[0];
+        var ext = file.name.split('.').slice(-1).toString();
+        if ((file.type === 'application/zip' ||
+              file.type === 'application/x-zip-compressed') &&
+            ext === 'zip') {
+          this._deployLocalCharm(file, env, db);
+        } else if (file.type === '') {
+          // If the file type is blank, we assume it is a directory.
+          this._zipUpDirectory(file, {
+            onSuccess: function(file) {
+              this._deployLocalCharm(this._zipUpDirectory(file), env, db);
+            },
+            onError: function() {
+              this._notifyUserZipFailed();
+            });
+        } else {
+          // If all else fails, assume it is a bundle (YAML file).
+          this._deployBundleFiles(file, env, db);
+        }
       } else {
         // Handle dropping charm/bundle tokens from the left side bar.
         this._deployFromCharmbrowser(evt, topo);
       }
+    },
+
+    _zipUpDirectory: function(directory, options) {
+      var writer = new zip.BlobWriter();
+      var entries = this._directoryToEntries(directory);
+      var addEntry = function(zipWriter) {
+        if (entries.length > 0) {
+          var entry = entries.pop();
+          var isDirectory = entry.isDirectory();
+          if (isDirectory) {
+            zipWriter.add(
+              entry.name, null, addEntry, undefined, {directory: isDirectory});
+          } else {
+            zipWriter.add(entry.name, zip.BlobReader(entry), addEntry);
+          }
+        } else {
+          // We are done; close the zip.  Once closed let the callback know we
+          // succeeded.
+          zipWriter.close(options.onSuccess);
+        }
+      };
+      zip.CreateWriter(writer, addEntry, options.onError);
+    },
+
+    _deployLocalCharm: function(file, env, db) {
+        localCharmHelpers.deployLocalCharm(file, env, db);
+    },
+
+    _deployBundleFiles: function(file, env, db) {
+        bundleImportHelpers.deployBundleFiles(file, env, db);
     },
 
     /**

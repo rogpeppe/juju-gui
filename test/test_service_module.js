@@ -448,3 +448,219 @@ describe('service module events', function() {
   });
 
 });
+
+describe('canvasDropHandler', function() {
+  var Y, views, utils, models, serviceModule;
+
+  // XXX Doing this much setup to call a single method on a single object is
+  // obscene.
+  before(function(done) {
+    Y = YUI(GlobalConfig).use([
+      'juju-gui',
+      'juju-models',
+      'juju-tests-utils',
+      'juju-views',
+      'node',
+      'node-event-simulate'],
+    function(Y) {
+      var juju = Y.namespace('juju');
+      models = Y.namespace('juju.models');
+      utils = Y.namespace('juju-tests.utils');
+      views = Y.namespace('juju.views');
+      done();
+    });
+  });
+
+  // XXX See comment above.
+  beforeEach(function() {
+    var viewContainer = utils.makeContainer(this);
+    var db = new models.Database();
+    var called = false;
+    var location_ =
+        { 'gui-x': 0,
+          'gui-y': 0};
+    var env = {
+      update_annotations: function(name, type, data) {
+        called = true;
+        location_['gui-x'] = data['gui-x'];
+        location_['gui-y'] = data['gui-y'];},
+      get: function() {}};
+    var view = new views.environment(
+        { container: viewContainer,
+          db: db,
+          env: env});
+    view.render();
+    view.rendered();
+    serviceModule = view.topo.modules.ServiceModule;
+    serviceModule.set('useTransitions', false);
+  });
+
+  it('defers its implementatino to _canvasDropHandler', function() {
+    var files = {length: 2};
+    var evt = {
+      _event: {dataTransfer: {files: files}},
+      halt: function() {}
+    };
+    // Calling both functions with arguments that result in an early-out is the
+    // easiest way to show that the one is just a shim around the other.
+    assert.equal(
+      serviceModule.canvasDropHandler(evt),
+      serviceModule._canvasDropHandler(files));
+  });
+
+  it('halts the event so FF does not try to reload the page', function(done) {
+    var evt = {
+      _event: {dataTransfer: {files: {length: 2}}},
+      halt: function() {done();}
+    };
+    serviceModule.canvasDropHandler(evt);
+  });
+
+});
+
+describe('_canvasDropHandler', function() {
+  var Y, views, utils, models, serviceModule;
+
+  // XXX Doing this much setup to call a single method on a single object is
+  // obscene.
+  before(function(done) {
+    Y = YUI(GlobalConfig).use([
+      'juju-gui',
+      'juju-models',
+      'juju-tests-utils',
+      'juju-views',
+      'node',
+      'node-event-simulate'],
+    function(Y) {
+      var juju = Y.namespace('juju');
+      models = Y.namespace('juju.models');
+      utils = Y.namespace('juju-tests.utils');
+      views = Y.namespace('juju.views');
+      done();
+    });
+  });
+
+  // XXX See comment above.
+  beforeEach(function() {
+    var viewContainer = utils.makeContainer(this);
+    var db = new models.Database();
+    var called = false;
+    var location_ =
+        { 'gui-x': 0,
+          'gui-y': 0};
+    var env = {
+      update_annotations: function(name, type, data) {
+        called = true;
+        location_['gui-x'] = data['gui-x'];
+        location_['gui-y'] = data['gui-y'];},
+      get: function() {}};
+    var view = new views.environment(
+        { container: viewContainer,
+          db: db,
+          env: env});
+    view.render();
+    view.rendered();
+    serviceModule = view.topo.modules.ServiceModule;
+    serviceModule.set('useTransitions', false);
+  });
+
+  it('ignores drop events that contain more than one file', function() {
+    var files = {length: 2};
+    assert.equal(serviceModule._canvasDropHandler(files), 'event ignored');
+  });
+
+  it('deploys charms dropped from the sidebar', function(done) {
+    var files = {};
+    var self = {
+      _deployFromCharmbrowser: function() {done();}
+    };
+    Y.bind(serviceModule._canvasDropHandler, self)(files);
+  });
+
+  it('deploys a zipped charm directory when dropped', function(done) {
+    var file = {name: 'charm.zip', type: 'application/zip'};
+    var files = {length: 1, 0: file};
+    var self = {
+      _deployLocalCharm: function() {done();}
+    };
+    Y.bind(serviceModule._canvasDropHandler, self)(files);
+  });
+
+  it('recognizes zip files of type x-zip-compressed', function(done) {
+    var file = {name: 'charm.zip', type: 'application/x-zip-compressed'};
+    var files = {length: 1, 0: file};
+    var self = {
+      _deployLocalCharm: function() {done();}
+    };
+    Y.bind(serviceModule._canvasDropHandler, self)(files);
+  });
+
+  it('zips up dropped folders and then deploys them', function(done) {
+    var directory = {name: 'my-charm-directory', type: ''};
+    var files = {length: 1, 0: directory};
+    var zipCreated = false;
+    var self = {
+      _zipUpDirectory: function(directory_) {
+        assert.deepEqual(directory_, directory);
+        zipCreated = true;
+      },
+      _deployLocalCharm: function() {
+        assert.isTrue(zipCreated);
+        done();
+      }
+    };
+    Y.bind(serviceModule._canvasDropHandler, self)(files);
+  });
+
+});
+
+
+describe('_zipUpDirectory', function() {
+  var Y, views, utils, models, serviceModule;
+
+  // XXX Doing this much setup to call a single method on a single object is
+  // obscene.
+  before(function(done) {
+    Y = YUI(GlobalConfig).use([
+      'juju-gui',
+      'juju-models',
+      'juju-tests-utils',
+      'juju-views',
+      'node',
+      'node-event-simulate'],
+    function(Y) {
+      var juju = Y.namespace('juju');
+      models = Y.namespace('juju.models');
+      utils = Y.namespace('juju-tests.utils');
+      views = Y.namespace('juju.views');
+      done();
+    });
+  });
+
+  // XXX See comment above.
+  beforeEach(function() {
+    var viewContainer = utils.makeContainer(this);
+    var db = new models.Database();
+    var called = false;
+    var location_ =
+        { 'gui-x': 0,
+          'gui-y': 0};
+    var env = {
+      update_annotations: function(name, type, data) {
+        called = true;
+        location_['gui-x'] = data['gui-x'];
+        location_['gui-y'] = data['gui-y'];},
+      get: function() {}};
+    var view = new views.environment(
+        { container: viewContainer,
+          db: db,
+          env: env});
+    view.render();
+    view.rendered();
+    serviceModule = view.topo.modules.ServiceModule;
+    serviceModule.set('useTransitions', false);
+  });
+
+  it('does things', function() {
+  });
+});
