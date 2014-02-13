@@ -1,3 +1,15 @@
+=================
+About this branch
+=================
+
+This branch almost makes dropping a directory containing a charm onto
+the browser deploy that branch, but because of a bug in Chrome
+(https://code.google.com/p/chromium/issues/detail?id=343571) that makes
+this functionality a non-starter, we've decided to archive the branch
+here in the hopes that future generations will be able to take it up in
+the future.
+
+
 .. Run "make view-main-doc" to render this file and read it in the browser
    alongside the whole project documentation. To do this, you need the
    dependencies described in the "Documentation" section of the HACKING
