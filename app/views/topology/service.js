@@ -637,15 +637,18 @@ YUI.add('juju-topology-service', function(Y) {
     // TODO rename this to "canvasDropHandlerShim".
       // Prevent Ubuntu FF 22.0 from refreshing the page.
       evt.halt();
-      var files = evt._event.dataTransfer.files;
+      var dataTransfer = evt._event.dataTransfer;
       var topo = this.get('component');
       var env = topo.get('env');
       var db = topo.get('db');
-      return this._canvasDropHandler(files, topo, env, db, evt._event);
+      return this._canvasDropHandler(dataTransfer, topo, env, db, evt._event);
     },
 
-    _canvasDropHandler: function(files, topo, env, db, evt) {
-    // TODO rename this to "canvasDropHandler".
+    _canvasDropHandler: function(dataTransfer, topo, env, db, evt) {
+      // TODO rename this to "canvasDropHandler".
+      var self = this;
+      var files = dataTransfer.files;
+      debugger
       if (files && files.length > 1) {
         return 'event ignored';
       }
@@ -656,46 +659,105 @@ YUI.add('juju-topology-service', function(Y) {
         if ((file.type === 'application/zip' ||
               file.type === 'application/x-zip-compressed') &&
             ext === 'zip') {
-          this._deployLocalCharm(file, env, db);
-        } else if (file.type === '') {
-          // If the file type is blank, we assume it is a directory.
-          this._zipUpDirectory(file, {
-            onSuccess: function(file) {
-              this._deployLocalCharm(this._zipUpDirectory(file), env, db);
-            },
-            onError: function() {
-              this._notifyUserZipFailed();
-            });
+          self._deployLocalCharm(file, env, db);
+        } else if (files.length === 1 && files[0].type === '') {
+          // It looks like the dropped file might be a directory, if so, we
+          // need to use some webkit-only magic to access it.
+          if (dataTransfer.items && dataTransfer.items[0].webkitGetAsEntry) {
+            var directory = dataTransfer.items[0].webkitGetAsEntry();
+            if (directory.isDirectory) {
+              // Much async.  Very functions.  Wow.
+              var zipWriter = new zip.BlobWriter('application/zip');
+              zip.createWriter(zipWriter, function(zipWriter) {
+                // We want the top-level entries of the zip to be the files
+                // contained in the dropped directory, not the directory
+                // itself, therefore we read the directory entries and add them
+                // to the zip instead of adding the directory itself.
+                directory.createReader().readEntries(function(entries) {
+                  self._addEntriesToZip(entries, zipWriter, function() {
+                    // All entries have been added.  Close the zip file.
+                    zipWriter.close(function(zipFile) {
+                      console.log('closing zip');
+                      // The UI displays the file's name but the zip writer
+                      // doesn't set one so we'll use the top-level
+                      // directory's name.
+                      zipFile.name = directory.name;
+                      // Now that we've built the charm zip, deploy it.
+                      self._deployLocalCharm(zipFile, env, db);
+                    });
+                  });
+                });
+              });
+            } else {
+              // The dropped thing was not a directory.
+              // TODO add notification
+              return 'event ignored; dropped item not a directory';
+            }
+          } else {
+            // This browser doesn't support reading dropped directories.
+            // TODO add unsupported browser notification here.
+            return 'event ignored; browser lacks support for dropped folders';
+          }
         } else {
           // If all else fails, assume it is a bundle (YAML file).
-          this._deployBundleFiles(file, env, db);
+          self._deployBundleFiles(file, env, db);
         }
       } else {
         // Handle dropping charm/bundle tokens from the left side bar.
-        this._deployFromCharmbrowser(evt, topo);
+        self._deployFromCharmbrowser(evt, topo);
       }
     },
 
-    _zipUpDirectory: function(directory, options) {
-      var writer = new zip.BlobWriter();
-      var entries = this._directoryToEntries(directory);
-      var addEntry = function(zipWriter) {
-        if (entries.length > 0) {
-          var entry = entries.pop();
-          var isDirectory = entry.isDirectory();
-          if (isDirectory) {
-            zipWriter.add(
-              entry.name, null, addEntry, undefined, {directory: isDirectory});
-          } else {
-            zipWriter.add(entry.name, zip.BlobReader(entry), addEntry);
-          }
+    _removePathPrefix: function(path) {
+      return path.split('/').slice(2).join('/');
+    },
+
+    _addEntriesToZip: function(entries, zipWriter, onSuccess) {
+      // Every time this function is called it grabs a new entry off the list
+      // and adds it to the zip.  The zipWriter then calls the function again
+      // on success to add the next entry.
+      var self = this;
+      if (entries.length > 0) {
+        // There are more entries to add, keep going.
+        var entry = entries.shift();
+        var options, reader;
+        if (entry.isDirectory) {
+          options = {directory: true};
+          reader = null;
+          var onDirectoryAddSuccess = function () {
+            // After successfully adding the directory entry we need to add the
+            // entries contained in the directory.
+            entry.createReader().readEntries(function(subentries) {
+              self._addEntriesToZip(subentries, zipWriter, function() {
+                // Add the remaining entries.
+                self._addEntriesToZip(entries, zipWriter, onSuccess);
+              });
+            });
+          };
+          var shortPath = self._removePathPrefix(entry.fullPath);
+          console.log('adding directory', shortPath);
+          // Add the directory (and -- recusively -- its contents).
+          zipWriter.add(shortPath, reader, onDirectoryAddSuccess, undefined,
+              options);
         } else {
-          // We are done; close the zip.  Once closed let the callback know we
-          // succeeded.
-          zipWriter.close(options.onSuccess);
+          options = undefined;
+          var onFileAddSuccess = function () {
+            // When the current file has been added we add the rest.
+            self._addEntriesToZip(entries, zipWriter, onSuccess);
+          };
+          var fileReader = new FileReader();
+          fileReader.onload = function () {
+            // When the file has finished being read we write it to the zip.
+            var shortPath = self._removePathPrefix(entry.fullPath);
+            console.log('adding file', shortPath);
+            zipWriter.add(shortPath, zip.TextReader(fileReader.result),
+                onFileAddSuccess, undefined, options);
+          };
+          entry.file(function(file) {fileReader.readAsText(file);});
         }
-      };
-      zip.CreateWriter(writer, addEntry, options.onError);
+      } else {
+        onSuccess();
+      }
     },
 
     _deployLocalCharm: function(file, env, db) {
@@ -1372,6 +1434,7 @@ YUI.add('juju-topology-service', function(Y) {
     'juju-env',
     'unscaled-pack-layout',
     'bundle-import-helpers',
-    'local-charm-import-helpers'
+    'local-charm-import-helpers',
+    'zip'
   ]
 });

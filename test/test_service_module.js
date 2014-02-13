@@ -615,7 +615,7 @@ describe('_canvasDropHandler', function() {
 });
 
 
-describe('_zipUpDirectory', function() {
+describe('_addEntriesToZip', function() {
   var Y, views, utils, models, serviceModule;
 
   // XXX Doing this much setup to call a single method on a single object is
@@ -661,6 +661,130 @@ describe('_zipUpDirectory', function() {
     serviceModule.set('useTransitions', false);
   });
 
-  it('does things', function() {
+  it('calls the success handler when entries is empty', function(done) {
+    // We'll pass done() as the success handler, if it is called, the test
+    // passed.
+    var zipWriter = {close: function() {done();}};
+    serviceModule._addEntriesToZip([], zipWriter, done);
   });
+
+  it('adds a single file correctly', function(done) {
+    var entry = {
+      name: 'file-name.ext'
+    };
+    var zipWriter = {
+      add: function(name, reader, onSuccess, onProgress, options) {
+        assert.equal(name, entry.name);
+        // onSuccess() should be a reference to done();
+        onSuccess();
+      },
+      close: function() {done();}
+    };
+    serviceModule._addEntriesToZip([entry], zipWriter, done);
+  });
+
+  it('adds an empty directory correctly', function(done) {
+    var entry = {
+      name: 'an-empty-directory',
+      isDirectory: true,
+      createReader: function() {
+        return {
+          readEntries: function(doReading) {
+            // There are no entries in this fake directory.
+            doReading([]);
+          }
+        };
+      }
+    };
+    var zipWriter = {
+      add: function(name, reader, onSuccess, onProgress, options) {
+        assert.equal(name, entry.name);
+        assert.isTrue(options.directory);
+        // onSuccess() should be a reference to done();
+        onSuccess();
+      },
+      close: function() {done();}
+    };
+    serviceModule._addEntriesToZip([entry], zipWriter, done);
+  });
+
+  it('adds a directory containing a file correctly', function(done) {
+    var file = {
+      name: 'a-file',
+    };
+    var directoryRead = false;
+    var directory = {
+      name: 'a-directory',
+      isDirectory: true,
+      createReader: function() {
+        return {
+          readEntries: function(doReading) {
+            // There is a single entry and it is a directory.
+            directoryRead = true;
+            doReading([file]);
+          }
+        };
+      }
+    };
+    var entryNames = [directory.name, file.name];
+    var zipWriter = {
+      add: function(name, reader, onSuccess, onProgress, options) {
+        assert.equal(name, entryNames.shift());
+        onSuccess();
+      },
+      close: function() {done();}
+    };
+    var finalAssertions = function() {
+      assert.isTrue(directoryRead);
+      done();
+    };
+    serviceModule._addEntriesToZip([directory], zipWriter, finalAssertions);
+  });
+
+  it('adds a directory containing a directory correctly', function(done) {
+    var subdirectoryRead = false;
+    var subdirectory = {
+      name: 'a-subdirectory',
+      isDirectory: true,
+      createReader: function() {
+        return {
+          readEntries: function(doReading) {
+            // There are no entries in this fake directory.
+            subdirectoryRead = true;
+            doReading([]);
+          }
+        };
+      }
+    };
+    var directoryRead = false;
+    var directory = {
+      name: 'a-directory',
+      isDirectory: true,
+      createReader: function() {
+        return {
+          readEntries: function(doReading) {
+            // There is a single entry and it is a directory.
+            directoryRead = true;
+            doReading([subdirectory]);
+          }
+        };
+      }
+    };
+    var directoryNames = [directory.name, subdirectory.name];
+    var zipWriter = {
+      add: function(name, reader, onSuccess, onProgress, options) {
+        assert.equal(name, directoryNames.shift());
+        assert.isTrue(options.directory);
+        onSuccess();
+      },
+      close: function() {done();}
+    };
+    var finalAssertions = function() {
+      assert.isTrue(directoryRead);
+      assert.isTrue(subdirectoryRead);
+      done();
+    };
+    serviceModule._addEntriesToZip([directory], zipWriter, finalAssertions);
+  });
+
 });
