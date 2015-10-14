@@ -66,6 +66,7 @@ YUI.add('juju-env-bakery', function(Y) {
         }
         this.macaroonName = 'Macaroons-' + cfg.serviceName;
         this.setCookiePath = cfg.setCookiePath;
+        this.nonceLen = 24;
       },
 
       /**
@@ -355,6 +356,77 @@ YUI.add('juju-env-bakery', function(Y) {
       this.webhandler.sendGetRequest(
           response.Info.VisitURL,
           acceptHeaders, null, null, false, null, login.bind(this));
+    },
+
+    /**
+     Adds a public-key encrypted third party caveat.
+     
+     @method addThirdPartyCaveat
+     @param {macaroon object} The macaroon to add the caveat to.
+     @param {String} The condition for the third party to verify.
+     @param {String} The URL of the third party.
+     @param {Uint8Array} The third party public key to use (as returned
+            by nacl.box.keyPair().publicKey
+     @param {object} The encoding party's key pair (as returned
+            by nacl.box.keyPair())
+     @return {undefined} Nothing.
+     */
+    addThirdPartyCaveat: function(m, condition, location,
+                                  thirdPartyPublicKey, myKeyPair) {
+      var nonce = nacl.randomBytes(nonceLen);
+      var rootKey = nacl.randomBytes(rootKeyLen);
+      var plain = JSON.stringify({
+        RootKey: nacl.util.encodeBase64(rootKey),
+        Condition: condition
+      });
+      var sealed = nacl.box(nacl.util.decodeUTF8(plain), nonce,
+                            thirdPartyPublicKey, myKeyPair.secretKey);
+      var caveatIdObj = {
+        ThirdPartyPublicKey: nacl.util.encodeBase64(thirdPartyPublicKey),
+        FirstPartyPublicKey: nacl.util.encodeBase64(myKeyPair.publicKey),
+        Nonce:               nacl.util.encodeBase64(nonce),
+        Id:                  base64.StdEncoding.EncodeToString(sealed),
+      };
+      var caveatId = JSON.stringify(caveatIdObj);
+      m.addThirdPartyCaveat(toSJCLbits(rootKey), caveatId, location);
+    },
+    
+    /**
+     Discharges a public-key encrypted third party caveat.
+     @param {String} The third party caveat id to check.
+     @param {object} The third party's key pair (as returned
+            by nacl.box.keyPair())
+     @param {function} A function that is called to check the condition.
+            It should throw an exception if the condition is not met.
+     @return {macaroon} The macaroon that discharges the caveat.
+     */
+    dischargeThirdPartyCaveat: function(caveatId, myKeyPair, check) {
+      var caveatIdObj = JSON.parse(nacl.util.decodeBase64(caveatId));
+      if(nacl.util.encodeBase64(myKeyPair.publicKey) !==
+         caveatIdObj.ThirdPartyPublicKey) {
+        throw new Exception('public key mismatch');
+      }
+      var nonce = nacl.util.decodeBase64(caveatIdObj.Nonce);
+      var firstPartyPub = nacl.util.decodeBase64(
+        caveatIdObj.FirstPartyPublicKey
+      );
+      if(nonce.length !== nonceLen) {
+        throw new Exception('bad nonce length');
+      }
+      var sealed = nacl.util.decodeBase64(caveatIdObj.Id);
+      var unsealed = nacl.box.open(sealed, nonce, firstPartyPub,
+                                   myKeyPair.secretKey);
+      
+      var unsealedStr = nacl.util.encodeUTF8(unsealed);
+      var plain = JSON.parse(unsealedStr);
+      if(plain.Condition === undefined){
+        throw new Exception('empty condition in third party caveat');
+      }
+      // Check that the condition actually holds.
+      check(plain.Condition);
+      var rootKey = sjcl.codec.base64.toBits(plain.RootKey);
+      
+      return macaroon.newMacaroon(rootKey, caveatId, '');
     },
 
     /**
