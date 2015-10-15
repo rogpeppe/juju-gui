@@ -102,7 +102,6 @@ describe('Bakery', function() {
     it('calls original send with macaroon without auth needed', function() {
       bakery = new Y.juju.environments.web.Bakery({
         webhandler: new Y.juju.environments.web.WebHandler(),
-        visitMethod: null,
         serviceName: 'test',
         setCookiePath: 'set-auth-cookie'
       });
@@ -127,12 +126,170 @@ describe('Bakery', function() {
         'path', success, failure, {
           target: {
             status: 401,
-            responseText: '{"Info": {"Macaroon": ' + JSON.stringify(m) + '}}',
+            responseText: JSON.stringify({'Info': {'Macaroon': m}}),
             getResponseHeader: function(k) {return 'Macaroon';}
           }
         }
       );
       assert.equal(putCalled, 1);
+      assert.equal(originalCalled, 1);
+    });
+
+    it('calls original send with macaroon with third party ' +
+       'and no interaction needed', function() {
+      bakery = new Y.juju.environments.web.Bakery({
+        webhandler: new Y.juju.environments.web.WebHandler(),
+        visitMethod: null,
+        serviceName: 'test',
+      });
+      var originalCalled = 0;
+      bakery._sendOriginalRequest = function(path, sucessCallback,
+                                             failureCallback) {
+        originalCalled++;
+        assert.equal(path, 'path');
+        assert.equal(sucessCallback, success);
+        assert.equal(failureCallback, failure);
+      };
+      var originalMacaroon = macaroon.newMacaroon(['secret'],
+                                                  'some id', 'a location');
+      var firstParty = nacl.box.keyPair();
+      var thirdParty = nacl.box.keyPair();
+      bakery.addThirdPartyCaveat(originalMacaroon,
+                                 '[some third party secret]', 'elsewhere',
+                                 thirdParty.publicKey, firstParty);
+      var m = macaroon.export(originalMacaroon);
+
+      var postCalled = 0;
+      var postSuccess = true;
+      bakery.webhandler.sendPostRequest = function(path,headers,query,
+                                                   d,e,f,g,completed) {
+        postCalled++;
+        postSuccess = (path == 'elsewhere/discharge')
+                      && (headers['Bakery-Protocol-Version'] == 1)
+                      && (headers['Content-Type'] ==
+                          'application/x-www-form-urlencoded');
+
+        var caveatObj = {};
+        try {
+          query.split('&').forEach(function(part) {
+            var item = part.split('=');
+            caveatObj[item[0]] = decodeURIComponent(item[1]);
+          });
+        } catch (ex) {
+          fail('unable to read url query params from sendPost request');
+        }
+
+        var dischargeMacaroon = bakery.dischargeThirdPartyCaveat(caveatObj.id,
+          thirdParty, function(m) {});
+        // Call completed with 200 leads to no interaction
+        completed({'target' : {
+          status: 200,
+          responseText: JSON.stringify({
+            'Macaroon': macaroon.export(dischargeMacaroon)})
+        }});
+      };
+
+      bakery._requestHandlerWithInteraction(
+        'path', success, failure, {
+          target: {
+            status: 401,
+            responseText: JSON.stringify({'Info': {'Macaroon': m}}),
+            getResponseHeader: function(k) {return 'Macaroon';}
+          }
+        }
+      );
+
+      assert.equal(postCalled, 1);
+      assert.equal(postSuccess, true);
+      assert.equal(originalCalled, 1);
+    });
+
+    it('calls original send with macaroon with third party ' +
+       'and with interaction', function() {
+      var visitMethod = utils.makeStubFunction();
+      bakery = new Y.juju.environments.web.Bakery({
+        webhandler: new Y.juju.environments.web.WebHandler(),
+        visitMethod: visitMethod,
+        serviceName: 'test',
+      });
+      var originalCalled = 0;
+      bakery._sendOriginalRequest = function(path, sucessCallback,
+                                             failureCallback) {
+        originalCalled++;
+        assert.equal(path, 'path');
+        assert.equal(sucessCallback, success);
+        assert.equal(failureCallback, failure);
+      };
+      var originalMacaroon = macaroon.newMacaroon(['secret'],
+                                                  'some id', 'a location');
+      var firstParty = nacl.box.keyPair();
+      var thirdParty = nacl.box.keyPair();
+      bakery.addThirdPartyCaveat(originalMacaroon,
+                                 '[some third party secret]', 'elsewhere',
+                                 thirdParty.publicKey, firstParty);
+      var m = macaroon.export(originalMacaroon);
+
+      var postCalled = 0;
+      var postSuccess = true;
+      var dischargeMacaroon;
+      bakery.webhandler.sendPostRequest = function(path,headers,query,d,e,f,
+                                                   g,completed) {
+        postCalled++;
+        postSuccess = (path == 'elsewhere/discharge')
+                      && (headers['Bakery-Protocol-Version'] == 1)
+                      && (headers['Content-Type'] ==
+                          'application/x-www-form-urlencoded');
+
+        var caveatObj = {};
+        try {
+          query.split('&').forEach(function(part) {
+            var item = part.split('=');
+            caveatObj[item[0]] = decodeURIComponent(item[1]);
+          });
+        } catch (ex) {
+          fail('unable to read url query params from sendPost request');
+        }
+
+        dischargeMacaroon = bakery.dischargeThirdPartyCaveat(caveatObj.id,
+          thirdParty, function(m) {});
+
+        // Call completed with a 400
+        // and Interaction Required to simulate interaction
+        completed({'target' : {
+          status: 400,
+          responseText: '{"Code": "interaction required", ' +
+                        '"Info": {"WaitURL": "/mywaiturl"}}'
+        }});
+      };
+
+      var getCalled = 0 , getSuccess = false;
+      bakery.webhandler.sendGetRequest = function(path, headers, query , d, e,
+                                                  f, completed) {
+        getCalled++;
+        getSuccess = (path == '/mywaiturl');
+
+        completed({'target' : {
+          status: 200,
+          responseText: JSON.stringify({
+            'Macaroon': macaroon.export(dischargeMacaroon)})
+        }});
+      };
+
+      bakery._requestHandlerWithInteraction(
+        'path', success, failure, {
+          target: {
+            status: 401,
+            responseText: JSON.stringify({'Info': {'Macaroon': m}}),
+            getResponseHeader: function(k) {return 'Macaroon';}
+          }
+        }
+      );
+
+      assert.equal(postCalled, 1);
+      assert.equal(postSuccess, true);
+      assert.equal(visitMethod.callCount(), 1);
+      assert.equal(getCalled, 1);
+      assert.equal(getSuccess, true);
       assert.equal(originalCalled, 1);
     });
 
@@ -158,7 +315,7 @@ describe('Bakery', function() {
         'path', success, failure, {
           target: {
             status: 401,
-            responseText: '{"Info": {"Macaroon": ' + JSON.stringify(m) + '}}',
+            responseText: JSON.stringify({'Info': {'Macaroon': m}}),
             getResponseHeader: function(k) {return 'Macaroon';}
           }
         }
